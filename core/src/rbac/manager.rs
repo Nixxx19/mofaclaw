@@ -3,7 +3,6 @@
 use crate::rbac::config::RbacConfig;
 use crate::rbac::path_matcher::PathMatcher;
 use crate::rbac::role::Role;
-use regex;
 use std::path::Path;
 use tracing::{debug, warn};
 
@@ -291,16 +290,52 @@ impl RbacManager {
         PermissionResult::Allowed
     }
 
-    /// Check if command matches a pattern (supports wildcards)
     fn matches_command_pattern(&self, command: &str, pattern: &str) -> bool {
-        // Simple wildcard matching
-        if pattern.contains('*') {
-            let regex_pattern = pattern.replace(".", "\\.").replace("*", ".*");
-            if let Ok(re) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
-                return re.is_match(command);
+        // ── 1. Metacharacter gate ─────────────────────────────────────────
+        // Reject anything that could be interpreted by a shell interpreter.
+        // NOTE: Do NOT log the command itself — it may contain secrets.
+        const SHELL_METACHARS: &[char] = &[
+            ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}', '\n',
+            '\r', // CRLF injection
+            '%', '!', '^', // Windows: %VAR%, delayed expansion, escape
+        ];
+        if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
+            warn!("Command rejected: contained disallowed shell metacharacters");
+            return false;
+        }
+
+        // ── 2. Token match with globbing ──────────────────────────────────
+        let cmd_tokens: Vec<&str> = command.split_whitespace().collect();
+        let pattern_lower = pattern.to_lowercase();
+        let pat_tokens: Vec<&str> = pattern_lower.split_whitespace().collect();
+
+        if pat_tokens.is_empty() || cmd_tokens.is_empty() {
+            return false;
+        }
+
+        // Helper for recursive token matching
+        fn match_tokens(cmd: &[&str], pat: &[&str]) -> bool {
+            if pat.is_empty() {
+                return cmd.is_empty();
+            }
+            if pat[0] == "*" {
+                // Try matching the rest of the pattern against different suffixes of the command
+                for skip in 0..=cmd.len() {
+                    if match_tokens(&cmd[skip..], &pat[1..]) {
+                        return true;
+                    }
+                }
+                false
+            } else {
+                if cmd.is_empty() || cmd[0] != pat[0] {
+                    false
+                } else {
+                    match_tokens(&cmd[1..], &pat[1..])
+                }
             }
         }
-        command.starts_with(pattern)
+
+        match_tokens(&cmd_tokens, &pat_tokens)
     }
 
     /// Get role from Discord user ID and roles
@@ -496,6 +531,80 @@ mod tests {
         assert_eq!(
             manager.get_role_from_discord("456", &["Admin".to_string()]),
             Role::Admin
+        );
+    }
+
+    #[test]
+    fn test_matches_command_pattern_injection() {
+        let manager = create_test_manager();
+
+        // ── Exact match (no wildcard) ──────────────────────────────────────
+        assert!(manager.matches_command_pattern("ls", "ls"));
+
+        // Extra args must be DENIED without wildcard — this was the bypass
+        assert!(
+            !manager.matches_command_pattern("ls -la", "ls"),
+            "'ls' pattern must not allow arguments"
+        );
+        assert!(
+            !manager.matches_command_pattern("cat /etc/shadow", "cat"),
+            "'cat' pattern must not allow reading arbitrary files"
+        );
+        assert!(
+            !manager.matches_command_pattern("cat /etc/passwd", "cat"),
+            "'cat' pattern must not allow reading /etc/passwd"
+        );
+
+        // ── Wildcard patterns allow arguments ─────────────────────────────
+        assert!(
+            manager.matches_command_pattern("ls", "ls *"),
+            "wildcard pattern allows bare command"
+        );
+        assert!(
+            manager.matches_command_pattern("ls -la", "ls *"),
+            "wildcard pattern allows arguments"
+        );
+        assert!(
+            manager.matches_command_pattern("ls -la /tmp", "ls *"),
+            "wildcard pattern allows multiple arguments"
+        );
+        assert!(
+            manager.matches_command_pattern("cat /tmp/report.txt", "cat *"),
+            "explicit 'cat *' pattern should allow paths"
+        );
+
+        // ── Multi-token patterns ───────────────────────────────────────────
+        assert!(manager.matches_command_pattern("git status", "git status"));
+        assert!(
+            !manager.matches_command_pattern("git log", "git status"),
+            "'git status' pattern must not match 'git log'"
+        );
+        assert!(
+            !manager.matches_command_pattern("git status --short", "git status"),
+            "'git status' pattern must not allow extra args"
+        );
+        assert!(
+            manager.matches_command_pattern("git log --oneline", "git *"),
+            "'git *' pattern allows any subcommand"
+        );
+
+        // ── Metacharacter injection blocked ───────────────────────────────
+        assert!(!manager.matches_command_pattern("ls; rm -rf /", "ls *"));
+        assert!(!manager.matches_command_pattern("ls && echo hacked", "ls *"));
+        assert!(!manager.matches_command_pattern("ls || true", "ls *"));
+        assert!(!manager.matches_command_pattern("ls > /etc/passwd", "ls *"));
+        assert!(!manager.matches_command_pattern("ls < /etc/shadow", "ls *"));
+        assert!(!manager.matches_command_pattern("ls $(whoami)", "ls *"));
+        assert!(!manager.matches_command_pattern("ls `whoami`", "ls *"));
+
+        // ── Wrong program name must not match ─────────────────────────────
+        assert!(
+            !manager.matches_command_pattern("lst", "ls"),
+            "'lst' must not match 'ls' pattern"
+        );
+        assert!(
+            !manager.matches_command_pattern("lsr", "ls *"),
+            "'lsr' must not match 'ls *' pattern"
         );
     }
 }
