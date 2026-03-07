@@ -321,9 +321,20 @@ impl WorkflowEngine {
                             }
                         }
                         Err(e) => {
-                            warn!("Approval process failed: {}, auto-approving", e);
-                            // Auto-approve on error to not block workflow
-                            workflow.status = WorkflowStatus::Running;
+                            warn!("Approval process failed for step {}: {}", step.id, e);
+                            workflow.status = WorkflowStatus::Failed;
+                            workflow.completed_at = Some(Utc::now());
+                            
+                            let mut workflows = self.workflows.write().await;
+                            workflows.insert(workflow_id.clone(), workflow.clone());
+                            drop(workflows);
+                            
+                            return Ok(WorkflowResult {
+                                workflow_id: workflow_id.clone(),
+                                success: false,
+                                completed_steps: workflow.current_step,
+                                error: Some(format!("Approval process failed: {}", e)),
+                            });
                         }
                     }
                 } else {
