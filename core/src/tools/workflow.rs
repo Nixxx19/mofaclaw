@@ -203,7 +203,7 @@ impl SimpleTool for ListWorkflowsTool {
     }
 
     fn description(&self) -> &str {
-        "List all available workflow definitions"
+        "List all active workflow executions and available workflow definitions"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -215,11 +215,11 @@ impl SimpleTool for ListWorkflowsTool {
     }
 
     async fn execute(&self, _input: ToolInput) -> ToolResult {
-        let workflows = self.workflow_engine.list_workflows().await;
+        let active_workflows = self.workflow_engine.list_workflows().await;
         ToolResult::success_text(
             serde_json::to_string(&json!({
-                "workflows": workflows,
-                "available_workflows": ["code_review", "design"]
+                "active_workflows": active_workflows,
+                "available_workflow_definitions": ["code_review", "design"]
             }))
             .unwrap_or_else(|_| "Workflows listed".to_string()),
         )
