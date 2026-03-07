@@ -249,11 +249,11 @@ mod tests {
         let msg1 = tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver1.recv())
             .await
             .ok()
-            .flatten();
+            .and_then(|r| r.ok());
         let msg2 = tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver2.recv())
             .await
             .ok()
-            .flatten();
+            .and_then(|r| r.ok());
 
         assert!(
             msg1.is_some() || msg2.is_some(),

@@ -16,6 +16,7 @@ use mofaclaw_core::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use serde_json::Value;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,8 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Execute the workflow
     println!("\nExecuting workflow...");
-    let mut initial_context = HashMap::new();
-    initial_context.insert("user_request".to_string(), "Implement a user authentication system with login and registration".to_string());
+    let mut initial_context: HashMap<String, Value> = HashMap::new();
+    initial_context.insert("user_request".to_string(), Value::String("Implement a user authentication system with login and registration".to_string()));
     
     match workflow_engine.execute_workflow(workflow, team.clone(), initial_context).await {
         Ok(result) => {
