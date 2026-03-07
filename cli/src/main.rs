@@ -20,7 +20,7 @@ use mofaclaw_core::{
     },
 };
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -373,14 +373,8 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     let openai_config = OpenAIConfig::new(&api_key)
         .with_model(&model)
         .with_base_url(api_base.unwrap_or_else(|| {
-            // Default to OpenRouter for Anthropic models
-            if model.contains("anthropic") || model.contains("claude") {
-                "https://openrouter.ai/api/v1".to_string()
-            } else if model.contains("openai") || model.contains("gpt") {
-                "https://openrouter.ai/api/v1".to_string()
-            } else {
-                "https://openrouter.ai/api/v1".to_string()
-            }
+            // Default to OpenRouter
+            "https://openrouter.ai/api/v1".to_string()
         }));
 
     let mofa_provider = Arc::new(OpenAIProvider::with_config(openai_config));
@@ -490,20 +484,6 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         println!("Feishu: enabled (via Python bridge on ws://localhost:3004)");
     }
 
-    // Initialize RBAC manager if configured
-    let rbac_manager: Option<Arc<RbacManager>> =
-        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-            if rbac_config.enabled {
-                let workspace = config.workspace_path();
-                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
     // register discord channel if enabled
     if config.channels.discord.enabled {
         match if let Some(ref rbac) = rbac_manager {
@@ -540,7 +520,7 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     )
     .with_callback(Arc::new(move |prompt: String| {
         let agent = Arc::clone(&agent_for_heartbeat);
-        Box::pin(async move { Ok(agent.process_direct(&prompt, "heartbeat").await?) })
+        Box::pin(async move { agent.process_direct(&prompt, "heartbeat").await })
     }));
 
     println!("Heartbeat: every 30m");
@@ -1022,7 +1002,7 @@ async fn command_cron(cmd: CronCommands) -> Result<()> {
 }
 
 /// Create workspace template files
-async fn create_workspace_templates(workspace: &PathBuf) -> Result<()> {
+async fn create_workspace_templates(workspace: &Path) -> Result<()> {
     let agents_md = r#"# Agent Instructions
 
 You are a helpful AI assistant. Be concise, accurate, and friendly.
@@ -1098,7 +1078,7 @@ This file stores important information that should persist across sessions.
 }
 
 /// Copy builtin skills from installation directory to workspace
-async fn copy_builtin_skills(workspace: &PathBuf) -> Result<()> {
+async fn copy_builtin_skills(workspace: &Path) -> Result<()> {
     let builtin_skills = SkillsManager::find_builtin_skills();
 
     if let Some(builtin_path) = builtin_skills {
