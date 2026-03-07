@@ -31,12 +31,8 @@ impl AgentId {
         }
     }
 
-    /// Get a string representation of the agent ID
-    pub fn to_string(&self) -> String {
-        format!("{}:{}:{}", self.team_id, self.role, self.instance_id)
-    }
-
     /// Parse an agent ID from a string (format: "team_id:role:instance_id")
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() == 3 {
@@ -53,7 +49,7 @@ impl AgentId {
 
 impl fmt::Display for AgentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}:{}:{}", self.team_id, self.role, self.instance_id)
     }
 }
 
