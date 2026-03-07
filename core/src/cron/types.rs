@@ -88,6 +88,7 @@ pub struct CronJobState {
     pub last_error: Option<String>,
 }
 
+<<<<<<< HEAD
 impl Default for CronJobState {
     fn default() -> Self {
         Self {
@@ -99,6 +100,8 @@ impl Default for CronJobState {
     }
 }
 
+=======
+>>>>>>> 2c2c223 (remove extra blank line in cron types)
 /// A cron job
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
