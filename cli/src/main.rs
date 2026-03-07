@@ -13,6 +13,11 @@ use mofaclaw_core::{
     rbac::RbacManager,
     save_config,
     tools::{ToolRegistry, ToolRegistryExecutor},
+    agent::collaboration::{
+        team::TeamManager,
+        workflow::{WorkflowEngine, create_code_review_workflow, create_design_workflow},
+        workspace::SharedWorkspace,
+    },
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -86,6 +91,24 @@ enum Commands {
         #[command(subcommand)]
         session_cmd: SessionCommands,
     },
+
+    /// Manage multi-agent teams
+    Team {
+        #[command(subcommand)]
+        team_cmd: TeamCommands,
+    },
+
+    /// Manage workflows
+    Workflow {
+        #[command(subcommand)]
+        workflow_cmd: WorkflowCommands,
+    },
+
+    /// Manage shared workspace
+    Workspace {
+        #[command(subcommand)]
+        workspace_cmd: WorkspaceCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -119,6 +142,70 @@ enum SessionCommands {
         /// Confirm deletion without prompt
         #[arg(short, long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TeamCommands {
+    /// Create a new agent team
+    Create {
+        /// Team ID
+        #[arg(short, long)]
+        id: String,
+        /// Team name
+        #[arg(short, long)]
+        name: String,
+        /// Roles (format: role1:instance1,role2:instance2)
+        #[arg(short, long)]
+        roles: String,
+    },
+    /// List all teams
+    List,
+    /// Show team status
+    Status {
+        /// Team ID
+        team_id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkflowCommands {
+    /// Start a workflow
+    Start {
+        /// Workflow name (code_review, design)
+        #[arg(short, long)]
+        name: String,
+        /// Team ID
+        #[arg(short, long)]
+        team: String,
+    },
+    /// List all workflows
+    List,
+    /// Show workflow status
+    Status {
+        /// Workflow ID
+        workflow_id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkspaceCommands {
+    /// List all artifacts
+    List {
+        /// Team ID
+        #[arg(short, long)]
+        team: String,
+        /// Filter by type (code_file, design_doc, test_file, review_comment, other)
+        #[arg(short, long)]
+        r#type: Option<String>,
+    },
+    /// Show artifact details
+    Show {
+        /// Team ID
+        #[arg(short, long)]
+        team: String,
+        /// Artifact ID
+        artifact_id: String,
     },
 }
 
@@ -197,6 +284,15 @@ async fn main() -> Result<()> {
         }
         Commands::Session { session_cmd } => {
             command_session(session_cmd).await?;
+        }
+        Commands::Team { team_cmd } => {
+            command_team(team_cmd).await?;
+        }
+        Commands::Workflow { workflow_cmd } => {
+            command_workflow(workflow_cmd).await?;
+        }
+        Commands::Workspace { workspace_cmd } => {
+            command_workspace(workspace_cmd).await?;
         }
     }
 
@@ -1144,6 +1240,209 @@ async fn command_session(cmd: SessionCommands) -> Result<()> {
                 println!("Deleted session: {}", key);
             } else {
                 println!("Session not found: {}", key);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Team management commands
+async fn command_team(cmd: TeamCommands) -> Result<()> {
+    let config = Arc::new(load_config().await?);
+    let user_bus = MessageBus::new();
+    let sessions = Arc::new(SessionManager::new(&config));
+    let team_manager = Arc::new(TeamManager::new(config, user_bus, sessions));
+
+    match cmd {
+        TeamCommands::Create { id, name, roles } => {
+            // Parse roles (format: role1:instance1,role2:instance2)
+            let role_list: Vec<(String, String)> = roles
+                .split(',')
+                .map(|r| {
+                    let parts: Vec<&str> = r.split(':').collect();
+                    if parts.len() == 2 {
+                        (parts[0].to_string(), parts[1].to_string())
+                    } else {
+                        panic!("Invalid role format: {}. Expected format: role:instance", r);
+                    }
+                })
+                .collect();
+
+            match team_manager.create_team(id.clone(), name.clone(), role_list).await {
+                Ok(team) => {
+                    println!("Team '{}' created successfully!", name);
+                    println!("Team ID: {}", team.id);
+                    println!("Members: {}", team.member_count());
+                }
+                Err(e) => {
+                    return Err(anyhow!("Failed to create team: {}", e));
+                }
+            }
+        }
+        TeamCommands::List => {
+            let teams = team_manager.list_teams().await;
+            if teams.is_empty() {
+                println!("No teams found.");
+            } else {
+                println!("Teams ({}):", teams.len());
+                for team_id in teams {
+                    if let Some(team) = team_manager.get_team(&team_id).await {
+                        println!("  - {} ({}) - {} members", team.id, team.name, team.member_count());
+                    }
+                }
+            }
+        }
+        TeamCommands::Status { team_id } => {
+            match team_manager.get_team(&team_id).await {
+                Some(team) => {
+                    println!("Team: {}", team.name);
+                    println!("ID: {}", team.id);
+                    println!("Status: {:?}", team.status);
+                    println!("Members: {}", team.member_count());
+                    for (instance_id, member) in &team.members {
+                        println!("  - {} ({}) - {:?}", instance_id, member.agent_id.role, member.status);
+                    }
+                }
+                None => {
+                    return Err(anyhow!("Team '{}' not found", team_id));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Workflow management commands
+async fn command_workflow(cmd: WorkflowCommands) -> Result<()> {
+    let workflow_engine = Arc::new(WorkflowEngine::new());
+    let config = Arc::new(load_config().await?);
+    let user_bus = MessageBus::new();
+    let sessions = Arc::new(SessionManager::new(&config));
+    let team_manager = Arc::new(TeamManager::new(config, user_bus, sessions));
+
+    match cmd {
+        WorkflowCommands::Start { name, team } => {
+            // Get team
+            let team_arc = match team_manager.get_team(&team).await {
+                Some(t) => t,
+                None => return Err(anyhow!("Team '{}' not found", team)),
+            };
+
+            // Create workflow based on name
+            let workflow = match name.as_str() {
+                "code_review" => create_code_review_workflow(),
+                "design" => create_design_workflow(),
+                _ => return Err(anyhow!("Unknown workflow: {}. Available: code_review, design", name)),
+            };
+
+            // Start workflow execution
+            // Note: execute_workflow takes ownership, so we need to clone
+            match workflow_engine.execute_workflow(workflow.clone(), team_arc.clone(), std::collections::HashMap::new()).await {
+                Ok(result) => {
+                    if result.success {
+                        println!("Workflow '{}' completed successfully!", name);
+                        println!("Completed steps: {}", result.completed_steps);
+                    } else {
+                        println!("Workflow '{}' failed", name);
+                        if let Some(err) = result.error {
+                            println!("Error: {}", err);
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow!("Failed to execute workflow: {}", e));
+                }
+            }
+        }
+        WorkflowCommands::List => {
+            let workflows = workflow_engine.list_workflows().await;
+            if workflows.is_empty() {
+                println!("No workflows found.");
+            } else {
+                println!("Workflows ({}):", workflows.len());
+                for workflow_id in workflows {
+                    if let Some(workflow) = workflow_engine.get_workflow(&workflow_id).await {
+                        println!("  - {} ({}) - {:?}", workflow.id, workflow.name, workflow.status);
+                    }
+                }
+            }
+        }
+        WorkflowCommands::Status { workflow_id } => {
+            match workflow_engine.get_workflow(&workflow_id).await {
+                Some(workflow) => {
+                    println!("Workflow: {}", workflow.name);
+                    println!("ID: {}", workflow.id);
+                    println!("Status: {:?}", workflow.status);
+                    println!("Current step: {}/{}", workflow.current_step + 1, workflow.steps.len());
+                    if let Some(step) = workflow.current_step() {
+                        println!("Current step: {}", step.name);
+                    }
+                }
+                None => {
+                    return Err(anyhow!("Workflow '{}' not found", workflow_id));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Workspace management commands
+async fn command_workspace(cmd: WorkspaceCommands) -> Result<()> {
+    match cmd {
+        WorkspaceCommands::List { team, r#type } => {
+            let config = load_config().await?;
+            let workspace_path = config.workspace_path();
+            let workspace = Arc::new(SharedWorkspace::new(team.clone(), workspace_path));
+            let artifact_ids = workspace.list_artifacts().await;
+
+            if artifact_ids.is_empty() {
+                println!("No artifacts found in workspace for team '{}'", team);
+            } else {
+                println!("Artifacts for team '{}' ({}):", team, artifact_ids.len());
+                for artifact_id in artifact_ids {
+                    if let Some(artifact) = workspace.get_artifact(&artifact_id).await {
+                        if let Some(filter_type) = &r#type {
+                            // Filter by type if specified
+                            let type_str = format!("{:?}", artifact.artifact_type);
+                            if !type_str.to_lowercase().contains(&filter_type.to_lowercase()) {
+                                continue;
+                            }
+                        }
+                        println!("  - {} (v{}) - {}", artifact.id, artifact.version, artifact.name);
+                        println!("    Modified by: {} at {}", artifact.modified_by, artifact.modified_at.format("%Y-%m-%d %H:%M:%S"));
+                    }
+                }
+            }
+        }
+        WorkspaceCommands::Show { team, artifact_id } => {
+            let config = load_config().await?;
+            let workspace_path = config.workspace_path();
+            let workspace = Arc::new(SharedWorkspace::new(team.clone(), workspace_path));
+            match workspace.get_artifact(&artifact_id).await {
+                Some(artifact) => {
+                    println!("Artifact: {}", artifact.name);
+                    println!("ID: {}", artifact.id);
+                    println!("Version: {}", artifact.version);
+                    println!("Type: {:?}", artifact.artifact_type);
+                    println!("Created by: {} at {}", artifact.created_by, artifact.created_at.format("%Y-%m-%d %H:%M:%S"));
+                    println!("Modified by: {} at {}", artifact.modified_by, artifact.modified_at.format("%Y-%m-%d %H:%M:%S"));
+                    match &artifact.content {
+                        mofaclaw_core::agent::collaboration::workspace::ArtifactContent::FileContent { content } => {
+                            println!("\nContent preview (first 500 chars):");
+                            println!("{}", if content.len() > 500 { &content[..500] } else { content });
+                        }
+                        mofaclaw_core::agent::collaboration::workspace::ArtifactContent::FileReference { path } => {
+                            println!("\nFile reference: {}", path.display());
+                        }
+                    }
+                }
+                None => {
+                    return Err(anyhow!("Artifact '{}' not found in team '{}'", artifact_id, team));
+                }
             }
         }
     }
