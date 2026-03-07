@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let roles = vec![
         ("developer".to_string(), "dev-1".to_string()),
         ("reviewer".to_string(), "rev-1".to_string()),
+        ("tester".to_string(), "test-1".to_string()),
     ];
 
     let team = match team_manager.create_team("workflow-team", "Workflow Team", roles).await {
@@ -57,7 +58,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Execute the workflow
     println!("\nExecuting workflow...");
-    let initial_context = HashMap::new();
+    let mut initial_context = HashMap::new();
+    initial_context.insert("user_request".to_string(), "Implement a user authentication system with login and registration".to_string());
     
     match workflow_engine.execute_workflow(workflow, team.clone(), initial_context).await {
         Ok(result) => {
