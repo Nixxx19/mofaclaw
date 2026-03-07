@@ -20,8 +20,3 @@ build/
 
 # test files
 test_weather_format
-
-# development files (should not be committed)
-.claude/
-.cursor/
-.todo/
