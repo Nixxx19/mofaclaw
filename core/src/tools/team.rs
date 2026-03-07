@@ -210,7 +210,7 @@ impl SimpleTool for GetTeamStatusTool {
             None => return ToolResult::failure("Missing 'team_id' parameter"),
         };
 
-        match self.team_manager.get_team(&team_id).await {
+        match self.team_manager.get_team(team_id).await {
             Some(team) => ToolResult::success_text(
                 serde_json::to_string(&json!({
                     "team_id": team.id,
