@@ -87,7 +87,7 @@ impl SimpleTool for StartWorkflowTool {
             };
 
         // Get team from team manager
-        let team = match self.team_manager.get_team(&team_id).await {
+        let team = match self.team_manager.get_team(team_id).await {
             Some(t) => t,
             None => return ToolResult::failure(format!("Team '{}' not found", team_id)),
         };
@@ -163,7 +163,7 @@ impl SimpleTool for GetWorkflowStatusTool {
             None => return ToolResult::failure("Missing 'workflow_id' parameter"),
         };
 
-        match self.workflow_engine.get_workflow(&workflow_id).await {
+        match self.workflow_engine.get_workflow(workflow_id).await {
             Some(workflow) => ToolResult::success_text(
                 serde_json::to_string(&json!({
                     "workflow_id": workflow.id,
