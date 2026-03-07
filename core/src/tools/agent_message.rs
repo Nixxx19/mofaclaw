@@ -319,7 +319,10 @@ pub struct RespondToApprovalTool {
                 None => return ToolResult::failure("Missing 'correlation_id' parameter"),
             };
             let approved = match input.get::<serde_json::Value>("approved") {
-                Some(v) => v.as_bool().unwrap_or(false),
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => return ToolResult::failure("Invalid 'approved' parameter: expected a boolean"),
+                },
                 None => return ToolResult::failure("Missing 'approved' parameter"),
             };
             let comment = input.get_str("comment").map(|s| s.to_string());
