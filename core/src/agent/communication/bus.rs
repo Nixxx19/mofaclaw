@@ -53,7 +53,10 @@ impl AgentMessageBus {
             }
             Err(e) => {
                 warn!("Failed to publish agent message: {}", e);
-                Err(crate::error::MofaclawError::Other(format!("Failed to publish message: {}", e)))
+                Err(crate::error::MofaclawError::Other(format!(
+                    "Failed to publish message: {}",
+                    e
+                )))
             }
         }
     }
@@ -132,18 +135,17 @@ impl AgentMessageBus {
             // If the message has a topic, only deliver it to agents subscribed to that topic.
             // If there is no topic or no subscription information is available, fall back to
             // delivering the broadcast to all agents (current behavior).
-            if let AgentMessageType::Broadcast { topic, .. } = &message.message_type {
-                if let Ok(subscriptions_guard) = self.topic_subscriptions.try_read() {
-                    if let Some(subscribers) = subscriptions_guard.get(topic) {
-                        // Check if this agent is subscribed to the topic
-                        let agent_id_str = agent_id.to_string();
-                        if subscribers.contains(&agent_id_str) {
-                            return true;
-                        }
-                        // If topic has subscribers but this agent isn't one, don't deliver
-                        return false;
-                    }
+            if let AgentMessageType::Broadcast { topic, .. } = &message.message_type
+                && let Ok(subscriptions_guard) = self.topic_subscriptions.try_read()
+                && let Some(subscribers) = subscriptions_guard.get(topic)
+            {
+                // Check if this agent is subscribed to the topic
+                let agent_id_str = agent_id.to_string();
+                if subscribers.contains(&agent_id_str) {
+                    return true;
                 }
+                // If topic has subscribers but this agent isn't one, don't deliver
+                return false;
             }
             // No topic or no subscription info - deliver to all agents
             return true;
