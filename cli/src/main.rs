@@ -7,17 +7,17 @@ use mofa_sdk::{llm::LLMAgentBuilder, skills::SkillsManager};
 use mofaclaw_core::{
     AgentLoop, ChannelManager, Config, ContextBuilder, DingTalkChannel, FeishuChannel,
     HeartbeatService, MessageBus, SessionManager, SubagentManager, TelegramChannel,
-    channels::DiscordChannel,
-    load_config,
-    provider::{OpenAIConfig, OpenAIProvider},
-    rbac::RbacManager,
-    save_config,
-    tools::{ToolRegistry, ToolRegistryExecutor},
     agent::collaboration::{
         team::TeamManager,
         workflow::{WorkflowEngine, create_code_review_workflow, create_design_workflow},
         workspace::SharedWorkspace,
     },
+    channels::DiscordChannel,
+    get_data_dir, load_config,
+    provider::{OpenAIConfig, OpenAIProvider},
+    rbac::RbacManager,
+    save_config,
+    tools::{ToolRegistry, ToolRegistryExecutor, register_multi_agent_tools},
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -397,6 +397,32 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         AgentLoop::register_default_tools(&mut tools_guard, &workspace, brave_api_key, bus.clone());
     }
 
+    // Register multi-agent collaboration tools
+    {
+        let config_arc = Arc::new(config.clone());
+        let team_manager = Arc::new(
+            TeamManager::with_persistence(
+                config_arc,
+                bus.clone(),
+                sessions.clone(),
+                get_data_dir(),
+            )
+            .await,
+        );
+        TeamManager::set_self_ref(&team_manager).await;
+        let workflow_engine = Arc::new(WorkflowEngine::with_persistence(get_data_dir()).await);
+        let shared_workspace = Arc::new(SharedWorkspace::new("main", get_data_dir()));
+        let mut tools_guard = tools.write().await;
+        register_multi_agent_tools(
+            &mut tools_guard,
+            team_manager,
+            workflow_engine,
+            shared_workspace,
+            None,
+        )
+        .await;
+    }
+
     // Create ToolRegistryExecutor for LLMAgentBuilder
     let tool_executor = Arc::new(ToolRegistryExecutor::new(tools.clone()));
 
@@ -440,17 +466,18 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     let channel_manager = ChannelManager::new(&config, bus.clone());
 
     // Initialize RBAC manager if configured (must be before channel registrations)
-    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-        if rbac_config.enabled {
-            let workspace = config.workspace_path();
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+    let rbac_manager: Option<Arc<RbacManager>> =
+        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+            if rbac_config.enabled {
+                let workspace = config.workspace_path();
+                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     // register dingtalk channel if enabled
     if config.channels.dingtalk.enabled {
@@ -586,6 +613,32 @@ async fn command_agent(message: Option<String>, session: String) -> Result<()> {
     {
         let mut tools_guard = tools.write().await;
         AgentLoop::register_default_tools(&mut tools_guard, &workspace, brave_api_key, bus.clone());
+    }
+
+    // Register multi-agent collaboration tools
+    {
+        let config_arc = Arc::new(config.clone());
+        let team_manager = Arc::new(
+            TeamManager::with_persistence(
+                config_arc,
+                bus.clone(),
+                sessions.clone(),
+                get_data_dir(),
+            )
+            .await,
+        );
+        TeamManager::set_self_ref(&team_manager).await;
+        let workflow_engine = Arc::new(WorkflowEngine::with_persistence(get_data_dir()).await);
+        let shared_workspace = Arc::new(SharedWorkspace::new("main", get_data_dir()));
+        let mut tools_guard = tools.write().await;
+        register_multi_agent_tools(
+            &mut tools_guard,
+            team_manager,
+            workflow_engine,
+            shared_workspace,
+            None,
+        )
+        .await;
     }
 
     // Create ToolRegistryExecutor for LLMAgentBuilder
@@ -1255,7 +1308,8 @@ async fn command_team(cmd: TeamCommands) -> Result<()> {
     let config = Arc::new(load_config().await?);
     let user_bus = MessageBus::new();
     let sessions = Arc::new(SessionManager::new(&config));
-    let team_manager = Arc::new(TeamManager::new(config, user_bus, sessions));
+    let team_manager =
+        Arc::new(TeamManager::with_persistence(config, user_bus, sessions, get_data_dir()).await);
     TeamManager::set_self_ref(&team_manager).await;
 
     match cmd {
@@ -1276,7 +1330,10 @@ async fn command_team(cmd: TeamCommands) -> Result<()> {
                 })
                 .collect::<Result<Vec<(String, String)>>>()?;
 
-            match team_manager.create_team(id.clone(), name.clone(), role_list).await {
+            match team_manager
+                .create_team(id.clone(), name.clone(), role_list)
+                .await
+            {
                 Ok(team) => {
                     println!("Team '{}' created successfully!", name);
                     println!("Team ID: {}", team.id);
@@ -1295,27 +1352,33 @@ async fn command_team(cmd: TeamCommands) -> Result<()> {
                 println!("Teams ({}):", teams.len());
                 for team_id in teams {
                     if let Some(team) = team_manager.get_team(&team_id).await {
-                        println!("  - {} ({}) - {} members", team.id, team.name, team.member_count());
+                        println!(
+                            "  - {} ({}) - {} members",
+                            team.id,
+                            team.name,
+                            team.member_count()
+                        );
                     }
                 }
             }
         }
-        TeamCommands::Status { team_id } => {
-            match team_manager.get_team(&team_id).await {
-                Some(team) => {
-                    println!("Team: {}", team.name);
-                    println!("ID: {}", team.id);
-                    println!("Status: {:?}", team.status);
-                    println!("Members: {}", team.member_count());
-                    for (instance_id, member) in &team.members {
-                        println!("  - {} ({}) - {:?}", instance_id, member.agent_id.role, member.status);
-                    }
-                }
-                None => {
-                    return Err(anyhow!("Team '{}' not found", team_id));
+        TeamCommands::Status { team_id } => match team_manager.get_team(&team_id).await {
+            Some(team) => {
+                println!("Team: {}", team.name);
+                println!("ID: {}", team.id);
+                println!("Status: {:?}", team.status);
+                println!("Members: {}", team.member_count());
+                for (instance_id, member) in &team.members {
+                    println!(
+                        "  - {} ({}) - {:?}",
+                        instance_id, member.agent_id.role, member.status
+                    );
                 }
             }
-        }
+            None => {
+                return Err(anyhow!("Team '{}' not found", team_id));
+            }
+        },
     }
 
     Ok(())
@@ -1323,11 +1386,12 @@ async fn command_team(cmd: TeamCommands) -> Result<()> {
 
 /// Workflow management commands
 async fn command_workflow(cmd: WorkflowCommands) -> Result<()> {
-    let workflow_engine = Arc::new(WorkflowEngine::new());
+    let workflow_engine = Arc::new(WorkflowEngine::with_persistence(get_data_dir()).await);
     let config = Arc::new(load_config().await?);
     let user_bus = MessageBus::new();
     let sessions = Arc::new(SessionManager::new(&config));
-    let team_manager = Arc::new(TeamManager::new(config, user_bus, sessions));
+    let team_manager =
+        Arc::new(TeamManager::with_persistence(config, user_bus, sessions, get_data_dir()).await);
     TeamManager::set_self_ref(&team_manager).await;
 
     match cmd {
@@ -1342,12 +1406,24 @@ async fn command_workflow(cmd: WorkflowCommands) -> Result<()> {
             let workflow = match name.as_str() {
                 "code_review" => create_code_review_workflow(),
                 "design" => create_design_workflow(),
-                _ => return Err(anyhow!("Unknown workflow: {}. Available: code_review, design", name)),
+                _ => {
+                    return Err(anyhow!(
+                        "Unknown workflow: {}. Available: code_review, design",
+                        name
+                    ));
+                }
             };
 
             // Start workflow execution
             // Note: execute_workflow takes ownership, so we need to clone
-            match workflow_engine.execute_workflow(workflow.clone(), team_arc.clone(), std::collections::HashMap::new()).await {
+            match workflow_engine
+                .execute_workflow(
+                    workflow.clone(),
+                    team_arc.clone(),
+                    std::collections::HashMap::new(),
+                )
+                .await
+            {
                 Ok(result) => {
                     if result.success {
                         println!("Workflow '{}' completed successfully!", name);
@@ -1372,7 +1448,10 @@ async fn command_workflow(cmd: WorkflowCommands) -> Result<()> {
                 println!("Workflows ({}):", workflows.len());
                 for workflow_id in workflows {
                     if let Some(workflow) = workflow_engine.get_workflow(&workflow_id).await {
-                        println!("  - {} ({}) - {:?}", workflow.id, workflow.name, workflow.status);
+                        println!(
+                            "  - {} ({}) - {:?}",
+                            workflow.id, workflow.name, workflow.status
+                        );
                     }
                 }
             }
@@ -1383,7 +1462,11 @@ async fn command_workflow(cmd: WorkflowCommands) -> Result<()> {
                     println!("Workflow: {}", workflow.name);
                     println!("ID: {}", workflow.id);
                     println!("Status: {:?}", workflow.status);
-                    println!("Current step: {}/{}", workflow.current_step + 1, workflow.steps.len());
+                    println!(
+                        "Current step: {}/{}",
+                        workflow.current_step + 1,
+                        workflow.steps.len()
+                    );
                     if let Some(step) = workflow.current_step() {
                         println!("Current step: {}", step.name);
                     }
@@ -1416,12 +1499,22 @@ async fn command_workspace(cmd: WorkspaceCommands) -> Result<()> {
                         if let Some(filter_type) = &r#type {
                             // Filter by type if specified
                             let type_str = format!("{:?}", artifact.artifact_type);
-                            if !type_str.to_lowercase().contains(&filter_type.to_lowercase()) {
+                            if !type_str
+                                .to_lowercase()
+                                .contains(&filter_type.to_lowercase())
+                            {
                                 continue;
                             }
                         }
-                        println!("  - {} (v{}) - {}", artifact.id, artifact.version, artifact.name);
-                        println!("    Modified by: {} at {}", artifact.modified_by, artifact.modified_at.format("%Y-%m-%d %H:%M:%S"));
+                        println!(
+                            "  - {} (v{}) - {}",
+                            artifact.id, artifact.version, artifact.name
+                        );
+                        println!(
+                            "    Modified by: {} at {}",
+                            artifact.modified_by,
+                            artifact.modified_at.format("%Y-%m-%d %H:%M:%S")
+                        );
                     }
                 }
             }
@@ -1436,8 +1529,16 @@ async fn command_workspace(cmd: WorkspaceCommands) -> Result<()> {
                     println!("ID: {}", artifact.id);
                     println!("Version: {}", artifact.version);
                     println!("Type: {:?}", artifact.artifact_type);
-                    println!("Created by: {} at {}", artifact.created_by, artifact.created_at.format("%Y-%m-%d %H:%M:%S"));
-                    println!("Modified by: {} at {}", artifact.modified_by, artifact.modified_at.format("%Y-%m-%d %H:%M:%S"));
+                    println!(
+                        "Created by: {} at {}",
+                        artifact.created_by,
+                        artifact.created_at.format("%Y-%m-%d %H:%M:%S")
+                    );
+                    println!(
+                        "Modified by: {} at {}",
+                        artifact.modified_by,
+                        artifact.modified_at.format("%Y-%m-%d %H:%M:%S")
+                    );
                     match &artifact.content {
                         mofaclaw_core::agent::collaboration::workspace::ArtifactContent::FileContent { content } => {
                             println!("\nContent preview (first 500 chars):");
@@ -1449,7 +1550,11 @@ async fn command_workspace(cmd: WorkspaceCommands) -> Result<()> {
                     }
                 }
                 None => {
-                    return Err(anyhow!("Artifact '{}' not found in team '{}'", artifact_id, team));
+                    return Err(anyhow!(
+                        "Artifact '{}' not found in team '{}'",
+                        artifact_id,
+                        team
+                    ));
                 }
             }
         }
