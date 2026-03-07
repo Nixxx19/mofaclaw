@@ -159,26 +159,24 @@ impl SharedWorkspace {
         // Load artifacts from disk if they exist
         if artifacts_file.exists() {
             match fs::read_to_string(&artifacts_file).await {
-                Ok(content) => {
-                    match serde_json::from_str::<HashMap<String, Artifact>>(&content) {
-                        Ok(artifacts) => {
-                            let mut artifacts_guard = workspace.artifacts.write().await;
-                            for (id, artifact) in artifacts {
-                                let version = artifact.version;
-                                artifacts_guard.insert(id.clone(), artifact);
-                                workspace
-                                    .artifact_versions
-                                    .write()
-                                    .await
-                                    .entry(id)
-                                    .or_insert_with(Vec::new)
-                                    .push(version);
-                            }
-                            info!("Loaded {} artifacts from disk", artifacts_guard.len());
+                Ok(content) => match serde_json::from_str::<HashMap<String, Artifact>>(&content) {
+                    Ok(artifacts) => {
+                        let mut artifacts_guard = workspace.artifacts.write().await;
+                        for (id, artifact) in artifacts {
+                            let version = artifact.version;
+                            artifacts_guard.insert(id.clone(), artifact);
+                            workspace
+                                .artifact_versions
+                                .write()
+                                .await
+                                .entry(id)
+                                .or_insert_with(Vec::new)
+                                .push(version);
                         }
-                        Err(e) => warn!("Failed to parse artifacts file: {}", e),
+                        info!("Loaded {} artifacts from disk", artifacts_guard.len());
                     }
-                }
+                    Err(e) => warn!("Failed to parse artifacts file: {}", e),
+                },
                 Err(e) => warn!("Failed to read artifacts file: {}", e),
             }
         }
@@ -193,8 +191,9 @@ impl SharedWorkspace {
 
         let artifacts_file = workspace_dir.join("artifacts.json");
         let artifacts = self.artifacts.read().await;
-        let json = serde_json::to_string_pretty(&*artifacts)
-            .map_err(|e| crate::error::MofaclawError::Other(format!("Serialization error: {}", e)))?;
+        let json = serde_json::to_string_pretty(&*artifacts).map_err(|e| {
+            crate::error::MofaclawError::Other(format!("Serialization error: {}", e))
+        })?;
         fs::write(&artifacts_file, json).await?;
 
         debug!("Saved {} artifacts to disk", artifacts.len());
@@ -210,7 +209,8 @@ impl SharedWorkspace {
         content: ArtifactContent,
         created_by: AgentId,
     ) -> Result<Artifact> {
-        self.create_artifact_with_rbac(id, name, artifact_type, content, created_by, None).await
+        self.create_artifact_with_rbac(id, name, artifact_type, content, created_by, None)
+            .await
     }
 
     /// Create a new artifact with RBAC check
@@ -224,7 +224,7 @@ impl SharedWorkspace {
         role_capabilities: Option<&crate::agent::roles::RoleCapabilities>,
     ) -> Result<Artifact> {
         let id = id.into();
-        
+
         // RBAC check: verify agent can write files
         if let Some(caps) = role_capabilities
             && !caps.can_write_files
@@ -243,8 +243,7 @@ impl SharedWorkspace {
             return Err(crate::error::MofaclawError::Other(format!(
                 "Artifact with id {} already exists in workspace {}",
                 id, self.team_id
-            ))
-            .into());
+            )));
         }
 
         let artifact = Artifact::new(id.clone(), name, artifact_type, content, created_by);
@@ -274,7 +273,8 @@ impl SharedWorkspace {
         content: ArtifactContent,
         modified_by: AgentId,
     ) -> Result<Artifact> {
-        self.update_artifact_with_rbac(artifact_id, content, modified_by, None).await
+        self.update_artifact_with_rbac(artifact_id, content, modified_by, None)
+            .await
     }
 
     /// Update an existing artifact with RBAC check
@@ -347,7 +347,9 @@ impl SharedWorkspace {
         if let Some(caps) = role_capabilities
             && !caps.can_read_files
         {
-            warn!("Agent does not have permission to read artifacts (read_files capability required)");
+            warn!(
+                "Agent does not have permission to read artifacts (read_files capability required)"
+            );
             return None;
         }
 
@@ -372,13 +374,22 @@ impl SharedWorkspace {
         let artifacts = self.artifacts.read().await;
         artifacts
             .values()
-            .filter(|a| matches!((&a.artifact_type, artifact_type),
-                (ArtifactType::CodeFile { .. }, ArtifactType::CodeFile { .. })
-                | (ArtifactType::DesignDoc { .. }, ArtifactType::DesignDoc { .. })
-                | (ArtifactType::TestFile { .. }, ArtifactType::TestFile { .. })
-                | (ArtifactType::ReviewComment { .. }, ArtifactType::ReviewComment { .. })
-                | (ArtifactType::Other { .. }, ArtifactType::Other { .. })
-            ))
+            .filter(|a| {
+                matches!(
+                    (&a.artifact_type, artifact_type),
+                    (ArtifactType::CodeFile { .. }, ArtifactType::CodeFile { .. })
+                        | (
+                            ArtifactType::DesignDoc { .. },
+                            ArtifactType::DesignDoc { .. }
+                        )
+                        | (ArtifactType::TestFile { .. }, ArtifactType::TestFile { .. })
+                        | (
+                            ArtifactType::ReviewComment { .. },
+                            ArtifactType::ReviewComment { .. }
+                        )
+                        | (ArtifactType::Other { .. }, ArtifactType::Other { .. })
+                )
+            })
             .cloned()
             .collect()
     }
@@ -432,7 +443,9 @@ impl SharedWorkspace {
                         info!("Auto-merged artifact {}", artifact_id);
                     } else {
                         // For non-file content, fall back to last write wins
-                        warn!("Automatic merge only supported for file content, using last write wins");
+                        warn!(
+                            "Automatic merge only supported for file content, using last write wins"
+                        );
                     }
                 }
                 Ok(())
