@@ -115,7 +115,7 @@ impl SimpleTool for SendAgentMessageTool {
         };
 
         // Get team
-        let team = match self.team_manager.get_team(&team_id).await {
+        let team = match self.team_manager.get_team(team_id).await {
             Some(t) => t,
             None => return ToolResult::failure(format!("Team '{}' not found", team_id)),
         };
@@ -225,7 +225,7 @@ impl SimpleTool for BroadcastToTeamTool {
         };
 
         // Get team
-        let team = match self.team_manager.get_team(&team_id).await {
+        let team = match self.team_manager.get_team(team_id).await {
             Some(t) => t,
             None => return ToolResult::failure(format!("Team '{}' not found", team_id)),
         };
@@ -331,7 +331,7 @@ pub struct RespondToApprovalTool {
             };
 
             // Get team
-            let team = match self.team_manager.get_team(&team_id).await {
+            let team = match self.team_manager.get_team(team_id).await {
                 Some(t) => t,
                 None => return ToolResult::failure(format!("Team '{}' not found", team_id)),
             };
