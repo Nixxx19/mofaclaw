@@ -156,12 +156,32 @@ impl SimpleTool for ListTeamsTool {
     }
 
     async fn execute(&self, _input: ToolInput) -> ToolResult {
-        let teams = self.team_manager.list_teams().await;
+        let summaries = self.team_manager.list_teams_detailed().await;
+        let teams_json: Vec<serde_json::Value> = summaries
+            .iter()
+            .map(|s| {
+                json!({
+                    "team_id": s.id,
+                    "name": s.name,
+                    "member_count": s.member_count,
+                    "created_at": s.created_at.to_rfc3339(),
+                    "active": s.active,
+                    "note": if s.active {
+                        "Ready to use"
+                    } else {
+                        "Inactive (from previous session) — recreate with create_team to use"
+                    }
+                })
+            })
+            .collect();
         ToolResult::success_text(
             serde_json::to_string(&json!({
-                "teams": teams
+                "teams": teams_json,
+                "total": summaries.len(),
+                "active": summaries.iter().filter(|s| s.active).count(),
+                "inactive": summaries.iter().filter(|s| !s.active).count()
             }))
-            .unwrap_or_else(|_| format!("Found {} teams", teams.len())),
+            .unwrap_or_else(|_| format!("Found {} teams", summaries.len())),
         )
     }
 
@@ -210,19 +230,38 @@ impl SimpleTool for GetTeamStatusTool {
             None => return ToolResult::failure("Missing 'team_id' parameter"),
         };
 
-        match self.team_manager.get_team(team_id).await {
-            Some(team) => ToolResult::success_text(
+        // Check active (in-memory) team first
+        if let Some(team) = self.team_manager.get_team(team_id).await {
+            return ToolResult::success_text(
                 serde_json::to_string(&json!({
                     "team_id": team.id,
                     "team_name": team.name,
                     "member_count": team.member_count(),
                     "status": format!("{:?}", team.status),
+                    "active": true,
                     "created_at": team.created_at.to_rfc3339()
                 }))
                 .unwrap_or_else(|_| format!("Team: {}", team.name)),
-            ),
-            None => ToolResult::failure(format!("Team '{}' not found", team_id)),
+            );
         }
+
+        // Fall back to persisted snapshot (inactive team from previous session)
+        if let Some(snap) = self.team_manager.get_team_snapshot(team_id).await {
+            return ToolResult::success_text(
+                serde_json::to_string(&json!({
+                    "team_id": snap.id,
+                    "team_name": snap.name,
+                    "member_count": snap.member_count,
+                    "status": "Inactive",
+                    "active": false,
+                    "created_at": snap.created_at.to_rfc3339(),
+                    "note": "Team exists from a previous session. Use create_team to recreate it."
+                }))
+                .unwrap_or_else(|_| format!("Team {} (inactive)", snap.name)),
+            );
+        }
+
+        ToolResult::failure(format!("Team '{}' not found", team_id))
     }
 
     fn category(&self) -> ToolCategory {
