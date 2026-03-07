@@ -179,7 +179,7 @@ impl SimpleTool for GetArtifactTool {
             None => return ToolResult::failure("Missing 'artifact_id' parameter"),
         };
 
-        match self.workspace.get_artifact(&artifact_id).await {
+        match self.workspace.get_artifact(artifact_id).await {
             Some(artifact) => {
                 let content_str = match &artifact.content {
                     crate::agent::collaboration::ArtifactContent::FileContent { content } => {
