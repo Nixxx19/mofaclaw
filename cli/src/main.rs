@@ -1256,6 +1256,7 @@ async fn command_team(cmd: TeamCommands) -> Result<()> {
     let user_bus = MessageBus::new();
     let sessions = Arc::new(SessionManager::new(&config));
     let team_manager = Arc::new(TeamManager::new(config, user_bus, sessions));
+    TeamManager::set_self_ref(&team_manager).await;
 
     match cmd {
         TeamCommands::Create { id, name, roles } => {
@@ -1265,12 +1266,15 @@ async fn command_team(cmd: TeamCommands) -> Result<()> {
                 .map(|r| {
                     let parts: Vec<&str> = r.split(':').collect();
                     if parts.len() == 2 {
-                        (parts[0].to_string(), parts[1].to_string())
+                        Ok((parts[0].to_string(), parts[1].to_string()))
                     } else {
-                        panic!("Invalid role format: {}. Expected format: role:instance", r);
+                        Err(anyhow!(
+                            "Invalid role format: '{}'. Expected format: role:instance",
+                            r
+                        ))
                     }
                 })
-                .collect();
+                .collect::<Result<Vec<(String, String)>>>()?;
 
             match team_manager.create_team(id.clone(), name.clone(), role_list).await {
                 Ok(team) => {
@@ -1324,6 +1328,7 @@ async fn command_workflow(cmd: WorkflowCommands) -> Result<()> {
     let user_bus = MessageBus::new();
     let sessions = Arc::new(SessionManager::new(&config));
     let team_manager = Arc::new(TeamManager::new(config, user_bus, sessions));
+    TeamManager::set_self_ref(&team_manager).await;
 
     match cmd {
         WorkflowCommands::Start { name, team } => {
