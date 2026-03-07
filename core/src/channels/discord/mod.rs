@@ -22,6 +22,8 @@ pub struct Data {
     pub bus: MessageBus,
     /// discord configuration
     pub config: DiscordConfig,
+    /// rbac manager
+    pub rbac_manager: Option<Arc<RbacManager>>,
 }
 
 /// discord channel using serenity and poise
@@ -177,7 +179,7 @@ impl DiscordChannel {
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
             permissions,
-            rbac_manager: None, // Will be set if RBAC is configured
+            rbac_manager: ctx.data().rbac_manager.clone(), // Set from data setup
         }
     }
 
@@ -739,7 +741,7 @@ async fn status(
         .title(embed_title)
         .description(format!(
             "Processing: {}",
-            &request[..request.len().min(200)]
+            request.chars().take(200).collect::<String>()
         ))
         .color(0x2F3136) // neutral dark for pending
         .timestamp(serenity::Timestamp::now());
@@ -1983,7 +1985,7 @@ async fn help(
                 "**PR Management**\n`/pr create <title> [base] [head]` - create new pr (member)\n`/pr list [state]` - list prs (guest)\n`/pr view <number>` - view pr details (guest)\n`/pr merge <number>` - merge pr (admin only, checks CI)\n`/pr comment <number> <body>` - comment on pr (member)\n`/pr review <number> <approve|reject>` - code review (member)\n`/pr close <number>` - close pr (member)"
             }
             "status" => {
-                "**CI/CD Status View**\n`/status run_list [workflow] [limit]` - list recent workflow runs\n`/status run_view <run_id>` - view run details & failed logs\n`/status checks <pr_number>` - view PR CI check status\n`/status watch <run_id>` - real-time run monitoring\n\nExamples:\n`/status run_list` - list last 10 runs\n`/status run_list workflow:ci.yml limit:20`\n`/status run_view run_id:12345`\n`/status checks pr_number:42`\n`/status watch run_id:12345`"
+                "**CI/CD Status View**\n`/status action:RunList [workflow] [limit]` - list recent workflow runs\n`/status action:RunView run_id:<id>` - view run details & failed logs\n`/status action:Checks pr_number:<id>` - view PR CI check status\n`/status action:Watch run_id:<id>` - real-time run monitoring\n\nExamples:\n`/status action:RunList` - list last 10 runs\n`/status action:RunList workflow:ci.yml limit:20`\n`/status action:RunView run_id:12345`\n`/status action:Checks pr_number:42`\n`/status action:Watch run_id:12345`"
             }
             "release" => {
                 "**Release Management**\n`/release [version] create` - create release (admin only)\n`/release [version]` - view release\n`/release` - list all releases"
@@ -2067,6 +2069,7 @@ impl Channel for DiscordChannel {
         let http_ref_setup = http_ref.clone();
         let bus_message = bus.clone();
         let config_message = config.clone();
+        let rbac_manager_setup = self.rbac_manager.clone();
 
         let intents = serenity::GatewayIntents::non_privileged()
             | serenity::GatewayIntents::MESSAGE_CONTENT
@@ -2076,6 +2079,7 @@ impl Channel for DiscordChannel {
         struct MessageHandler {
             bus: MessageBus,
             config: DiscordConfig,
+            rbac_manager: Option<Arc<RbacManager>>,
         }
 
         #[serenity::async_trait]
@@ -2121,14 +2125,14 @@ impl Channel for DiscordChannel {
                     Vec::new()
                 };
 
-                let channel = DiscordChannel::new(self.config.clone(), self.bus.clone()).unwrap_or(
+                let channel = DiscordChannel::with_rbac(self.config.clone(), self.bus.clone(), self.rbac_manager.clone()).unwrap_or(
                     DiscordChannel {
                         config: self.config.clone(),
                         bus: self.bus.clone(),
                         running: Arc::new(RwLock::new(true)),
                         http: Arc::new(RwLock::new(None)),
                         permissions: PermissionManager::from_discord_config(&self.config),
-                        rbac_manager: None,
+                        rbac_manager: self.rbac_manager.clone(),
                     },
                 );
 
@@ -2320,6 +2324,7 @@ impl Channel for DiscordChannel {
                 let http_ref = http_ref_setup.clone();
                 let bus = bus_clone.clone();
                 let config = config_clone.clone();
+                let rbac_manager = rbac_manager_setup.clone();
                 Box::pin(async move {
                     info!("discord bot connected as {}", _ready.user.name);
                     *http_ref.write().await = Some(ctx.http.clone());
@@ -2355,7 +2360,7 @@ impl Channel for DiscordChannel {
                         }
                     }
 
-                    Ok(Data { bus, config })
+                    Ok(Data { bus, config, rbac_manager })
                 })
             })
             .build();
@@ -2363,6 +2368,7 @@ impl Channel for DiscordChannel {
         let message_handler = MessageHandler {
             bus: bus_message.clone(),
             config: config_message.clone(),
+            rbac_manager: self.rbac_manager.clone(),
         };
 
         let mut client = serenity::ClientBuilder::new(&config.token, intents)
