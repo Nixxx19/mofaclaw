@@ -127,17 +127,8 @@ impl AgentLoop {
         sessions: Arc<SessionManager>,
         tools: Arc<RwLock<ToolRegistry>>,
     ) -> Result<Self> {
-        Self::with_agent_and_tools_custom(
-            config,
-            agent,
-            provider,
-            bus,
-            sessions,
-            tools,
-            None,
-            None,
-        )
-        .await
+        Self::with_agent_and_tools_custom(config, agent, provider, bus, sessions, tools, None, None)
+            .await
     }
 
     /// Create a new agent loop with custom max_iterations and temperature
@@ -154,11 +145,10 @@ impl AgentLoop {
         max_iterations_override: Option<usize>,
         temperature_override: Option<f32>,
     ) -> Result<Self> {
-        let max_iterations = max_iterations_override
-            .unwrap_or(config.agents.defaults.max_tool_iterations);
+        let max_iterations =
+            max_iterations_override.unwrap_or(config.agents.defaults.max_tool_iterations);
         let default_model = config.agents.defaults.model.clone();
-        let temperature = temperature_override
-            .or(Some(config.agents.defaults.temperature as f32));
+        let temperature = temperature_override.or(Some(config.agents.defaults.temperature as f32));
         let max_tokens = Some(config.agents.defaults.max_tokens as u32);
         let context = ContextBuilder::new(config);
 
