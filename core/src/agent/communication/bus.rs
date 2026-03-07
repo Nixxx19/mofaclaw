@@ -53,10 +53,7 @@ impl AgentMessageBus {
             }
             Err(e) => {
                 warn!("Failed to publish agent message: {}", e);
-                Err(
-                    crate::error::MofaclawError::Other(format!("Failed to publish message: {}", e))
-                        .into(),
-                )
+                Err(crate::error::MofaclawError::Other(format!("Failed to publish message: {}", e)))
             }
         }
     }
@@ -124,10 +121,10 @@ impl AgentMessageBus {
     /// - Topic subscriptions (for broadcast messages)
     pub fn should_receive(&self, message: &AgentMessage, agent_id: &AgentId) -> bool {
         // Direct message to this agent
-        if let Some(ref to) = message.to {
-            if to == agent_id {
-                return true;
-            }
+        if let Some(ref to) = message.to
+            && to == agent_id
+        {
+            return true;
         }
 
         // Broadcast messages are received by all agents
