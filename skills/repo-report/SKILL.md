@@ -260,21 +260,22 @@ jq -n \
 ```
 
 ---
-## Optional Gaps / Notes
+## Implementation Notes (Caching, Pagination, Participation)
 
-Caching:
+Caching (optional):
 - The generator uses a simple on-disk cache for `gh pr list`, `gh issue list`, and `gh run list` results to avoid repeated calls on large repos.
 - Configure via:
-  - `REPO_REPORT_CACHE_ENABLED=1|0`
+  - `REPO_REPORT_CACHE_ENABLED=1|0` (default `1`)
   - `REPO_REPORT_CACHE_TTL_SECONDS` (default `600`)
   - `REPO_REPORT_CACHE_DIR` (default `~/.mofaclaw/cache/repo-report`)
+- Disable cache per run with: `--no-cache`
 
 Hard pagination limits:
 - The generator requests up to `1000` PRs/issues/runs via `gh` and then filters by the computed `$DAYS` window.
 - If a repo has more than that in the time window, results may still be incomplete (this is a limitation of API/CLI pagination caps).
 
 Participation API:
-- The docs include `gh api repos/owner/repo/stats/participation` as a reference, but the actual daily/weekly/monthly commit frequency tables are computed from `git log` for better granularity.
+- `gh api repos/owner/repo/stats/participation` is included as a reference command, but the daily/weekly/monthly commit frequency tables are computed from `git log` for better granularity.
 
 ## Reference Files
 
